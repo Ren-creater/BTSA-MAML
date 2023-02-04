@@ -110,7 +110,7 @@ def testEncode(pre_model, saver, sess, encodes, test_num_updates=None):
 
     metaval_accuracies = []
     TEST_FLAGS=FLAGS
-    TEST_FLAGS.update({train:False})
+    TEST_FLAGS.train=False
     n_query = 15
     loader_test = create_loader(TEST_FLAGS)
     loader_test.load_data_pkl()
@@ -131,30 +131,32 @@ def testEncode(pre_model, saver, sess, encodes, test_num_updates=None):
         inputa, labela, inputb, labelb = load_batch_data(loader_test, num_classes, FLAGS.update_batch_size, n_query, batch_size=1)
         feed_dict = {pre_model.inputa: inputa, pre_model.inputb: inputb, pre_model.labela: labela, pre_model.labelb: labelb, pre_model.meta_lr: 0.0}
         solution = sess.run([pre_model.fast_weights], feed_dict)[0][0]
-        dists = euclidean_distances(solution, initial_weights_np) # CHECK DONE !
+        dists = euclidean_distances(solution, np.vstack(initial_weights_np)) # CHECK DONE !
 
 
         model = pre_model
 
         we=[]
-        for i in range(initial_weights_np):
-            sum+=1/dists[i]
-        for i in range(initial_weights_np):
-            we.append(dists[i]/sum)
+        for i in range(len(initial_weights_np)):
+            sum+=1/dists[0][i]
+        for i in range(len(initial_weights_np)):
+            we.append(dists[0][i]/sum)
         w[task_i]=we
         tasks.append({"inputa":inputa, "labela":labela, "inputb":inputb, "labelb":labelb})
         solutions.append(solution)
+        task_i += 1
+        pbar.update(1)
               
     return {"tasks":tasks, "encodes":solutions, "w":w}
 
 
 
-def train(model, saver, sess,  tasks, w, resume_itr=0):            
+def train(model, saver, sess,  tasks, w, resume_itr=0):           
     n_query = 15
-    loader_train, loader_val = create_loader(FLAGS)
+    #loader_train, loader_val = create_loader(FLAGS)
 
-    loader_train.load_data_pkl()
-    loader_val.load_data_pkl()
+    #loader_train.load_data_pkl()
+    #loader_val.load_data_pkl()
 
     SUMMARY_INTERVAL = 100
     SAVE_INTERVAL = 2000
@@ -173,23 +175,24 @@ def train(model, saver, sess,  tasks, w, resume_itr=0):
     best_val_acc = 0
     Solution=None
 
-    for iteration in range(tasks):
-        model.w=w[iteration]
+    for iteration in range(len(tasks)):
+        for key in model.weights.keys():
+            model.update_lr[key] = model.update_lr[key] * w[iteration]
+
         t=tasks[iteration]
-        inputa, labela, inputb, labelb = t.inputa,t.labela,t.inputb,t.labelb##load_batch_data(loader_train, num_classes, FLAGS.update_batch_size, n_query, batch_size=FLAGS.meta_batch_size)
-        feed_dict = {model.inputa: inputa, model.inputb: inputb,  model.labela: labela, model.labelb: labelb}
-        input_tensors = [model.fast_weights, model.metatrain_op]
+        inputa, labela, inputb, labelb = t['inputa'],t['labela'],t['inputb'],t['labelb']#t.inputa,t.labela,t.inputb,t.labelb##load_batch_data(loader_train, num_classes, FLAGS.update_batch_size, n_query, batch_size=FLAGS.meta_batch_size)
+        feed_dict = {model.inputa: inputa, model.inputb: inputb,  model.labela: labela, model.labelb: labelb, model.global_step: iteration}
+        input_tensors = [model.metatrain_op, model.fast_weights]
 
         if (iteration % 20 ==0):
             input_tensors.extend([model.total_accuracy1, model.total_accuracies2[FLAGS.num_updates-1]])
 
         r = sess.run(input_tensors, feed_dict)
-        result=[r[1]]
-        Solution=r[0]
+        Solution=r[1]
 
         if (iteration % 20 ==0):
-            pre_accs.append(result[-2]/ FLAGS.meta_batch_size)
-            post_accs.append(result[-1]/ FLAGS.meta_batch_size)
+            pre_accs.append(r[-2]/ FLAGS.meta_batch_size)
+            post_accs.append(r[-1]/ FLAGS.meta_batch_size)
 
         #if (iteration!=0) and iteration % PRINT_INTERVAL == 0:
         if iteration % 200 == 0:
@@ -198,13 +201,13 @@ def train(model, saver, sess,  tasks, w, resume_itr=0):
             print(print_str)
             pre_accs, post_accs = [], []
 
-        if iteration % SAVE_INTERVAL == 0:
-            saver.save(sess, FLAGS.logdir + '/model' + str(iteration))
+        #if iteration % SAVE_INTERVAL == 0:
+            #saver.save(sess, FLAGS.logdir + '/model' + str(iteration))
             
 
         # # sinusoid is infinite data, so no need to test on meta-validation set.
         
-        if  iteration % TEST_PRINT_INTERVAL == 0:
+        """if  iteration % TEST_PRINT_INTERVAL == 0:
             task_i = 0
             pre_acc_val, post_acc_val = [],[]
             for task_i in range(600):
@@ -225,9 +228,9 @@ def train(model, saver, sess,  tasks, w, resume_itr=0):
 
             if np.array(post_acc_val).mean(0) > best_val_acc:
                 best_val_acc = np.array(post_acc_val).mean(0)
-                saver.save(sess, FLAGS.logdir + '/bestmodel')
+                #saver.save(sess, FLAGS.logdir + '/bestmodel')"""
 
-    saver.save(sess, FLAGS.logdir + '/model'+str(iteration))
+    #saver.save(sess, FLAGS.logdir + '/model'+str(iteration))
     return Solution
 
 
@@ -241,16 +244,16 @@ def test(model, saver, sess, train, tasks, test_num_updates=None):
     metaval_accuracies = []
 
     TEST_FLAGS=FLAGS
-    TEST_FLAGS.update({train:False})
+    TEST_FLAGS.train = False
 
     n_query = 15
-    loader_test = create_loader(TEST_FLAGS)
+    #loader_test = create_loader(TEST_FLAGS)
     
-    loader_test.load_data_pkl()
+    #loader_test.load_data_pkl()
     
     for task_i in tqdm(range(NUM_TEST_POINTS)):
-        model.weights=train[task_i]
-        inputa, labela, inputb, labelb = tasks[task_i].inputa, tasks[task_i].labela, tasks[task_i].inputb, tasks[task_i].labelb#load_batch_data(loader_test, num_classes, FLAGS.update_batch_size, n_query, batch_size=1)
+        sess.run(tf.assign(model.weights,train[task_i]))
+        inputa, labela, inputb, labelb = tasks[task_i]['inputa'], tasks[task_i]['labela'], tasks[task_i]['inputb'], tasks[task_i]['labelb']#load_batch_data(loader_test, num_classes, FLAGS.update_batch_size, n_query, batch_size=1)
         feed_dict = {model.inputa: inputa, model.inputb: inputb,  model.labela: labela, model.labelb: labelb}
         result = sess.run([model.total_accuracy1] + model.total_accuracies2, feed_dict)
         metaval_accuracies.append(result)
@@ -270,7 +273,7 @@ def test(model, saver, sess, train, tasks, test_num_updates=None):
 
 def main():
 
-    test_num_updates = 1 if FLAGS.train else 20
+    #test_num_updates = 1 if FLAGS.train else 20
 
     if not FLAGS.train:
         orig_meta_batch_size = FLAGS.meta_batch_size
@@ -297,7 +300,7 @@ def main():
     pre_model.construct_model(input_tensors=None, prefix='metaval_')
 
     model = MAML(dim_input, dim_output, test_num_updates=1)
-    model.construct_model(input_tensors=None, prefix='metatrain_')
+    model.construct_model(input_tensors=None, prefix='metatrain_',scope='model_')
 
 
     saver = loader = tf.train.Saver(tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES), max_to_keep=40)
@@ -312,6 +315,10 @@ def main():
     # Build graph before this..........
     tf.global_variables_initializer().run()
 
+    """for key in model.update_lr.keys():
+        model.update_lr[key]=0
+        print(model.update_lr[key])"""
+
     if FLAGS.resume or FLAGS.train:
         model_file = FLAGS.premaml
         if model_file:
@@ -325,18 +332,19 @@ def main():
             restorer.restore(sess, model_file)
 
 
-    trainEncode(pre_model, saver, sess, resume_itr)
-    testEncode(pre_model, saver, sess, trainEncode.encodes, test_num_updates)
+    trainEncode_result =trainEncode(pre_model, saver, sess, resume_itr)
+    encodes = trainEncode_result["encodes"]
+    testEncode_result = testEncode(pre_model, saver, sess,  encodes, test_num_updates=20)
     tr=[]
 
-    for i in range(testEncode.tasks):
+    for i in range(len(testEncode_result["tasks"])):
         
-        train(model, saver, sess, trainEncode.tasks, testEncode.w[i], resume_itr)
-        tr.append(train)
+        t=train(model, saver, sess, trainEncode_result["tasks"], testEncode_result["w"][i], resume_itr)
+        tr.append(t)
 
-    test_model = MAML(dim_input, dim_output, test_num_updates=1)
-    test_model.construct_model(input_tensors=None, prefix='metaval_')#, scope='model_%d'%i)
-    test(test_model, saver, sess, tr, testEncode.tasks, test_num_updates)
+    ##test_model = MAML(dim_input, dim_output, test_num_updates=1)
+    model.construct_model(input_tensors=None, prefix='metaval_',scope='model_')#, scope='model_%d'%i)
+    test(model, saver, sess, tr, testEncode_result["tasks"], test_num_updates=20)
 
 if __name__ == "__main__":
     main()
