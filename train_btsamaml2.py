@@ -59,6 +59,8 @@ flags.DEFINE_bool('test_set', False, 'Set to true to test on the the test set, F
 flags.DEFINE_integer('train_update_batch_size', -1, 'number of examples used for gradient update during training (use if you want to test with a different number).')
 flags.DEFINE_float('train_update_lr', -1, 'value of inner gradient step step during training. (use if you want to test with a different value)') # 0.1 for omniglot
 
+flags.DEFINE_bool('encode', True, 'True to encode, False to train and test.')
+
 # added flags
 flags.DEFINE_integer('lr_mode', 0, 'inner lr mode (default 0), 1: all variables share one lr 2: each variable has one lr  3: each variable has one lr with the same shape')
 flags.DEFINE_integer('num_test_tasks', 600, 'number to tasks for testing')
@@ -176,8 +178,8 @@ def train(model, saver, sess,  tasks, w, resume_itr=0):
     Solution=None
 
     for iteration in range(len(tasks)):
-        for key in model.weights.keys():
-            model.update_lr[key] = model.update_lr[key] * w[iteration]
+        
+        FLAGS.update_lr = FLAGS.update_lr * w[iteration]
 
         t=tasks[iteration]
         inputa, labela, inputb, labelb = t['inputa'],t['labela'],t['inputb'],t['labelb']#t.inputa,t.labela,t.inputb,t.labelb##load_batch_data(loader_train, num_classes, FLAGS.update_batch_size, n_query, batch_size=FLAGS.meta_batch_size)
@@ -295,12 +297,14 @@ def main():
         else:
             model.construct_model(input_tensors=None, prefix='metaval_', scope='model_%d'%i)
         model_dict[i] = model"""
+    if FLAGS.encode:
 
-    pre_model = MAML(dim_input, dim_output, test_num_updates=20)
-    pre_model.construct_model(input_tensors=None, prefix='metaval_')
+        pre_model = MAML(dim_input, dim_output, test_num_updates=20)
+        pre_model.construct_model(input_tensors=None, prefix='metaval_')
+    else:
 
-    model = MAML(dim_input, dim_output, test_num_updates=1)
-    model.construct_model(input_tensors=None, prefix='metatrain_',scope='model_')
+        model = MAML(dim_input, dim_output, test_num_updates=1)
+        model.construct_model(input_tensors=None, prefix='metatrain_',scope='model_')
 
 
     saver = loader = tf.train.Saver(tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES), max_to_keep=40)
@@ -318,33 +322,45 @@ def main():
     """for key in model.update_lr.keys():
         model.update_lr[key]=0
         print(model.update_lr[key])"""
-
-    if FLAGS.resume or FLAGS.train:
-        model_file = FLAGS.premaml
-        if model_file:
-            resume_itr = 0
-            print("Loading model weights from " + model_file)
-            variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
-            # remove the untrained parameters 
-            variables_to_restore = [v for v in variables if v.name.split('/')[0] =='model']
-            # load part parameters of the model
-            restorer = tf.train.Saver(variables_to_restore)#, scope='model')
-            restorer.restore(sess, model_file)
-
-
-    trainEncode_result =trainEncode(pre_model, saver, sess, resume_itr)
-    encodes = trainEncode_result["encodes"]
-    testEncode_result = testEncode(pre_model, saver, sess,  encodes, test_num_updates=20)
-    tr=[]
-
-    for i in range(len(testEncode_result["tasks"])):
         
-        t=train(model, saver, sess, trainEncode_result["tasks"], testEncode_result["w"][i], resume_itr)
-        tr.append(t)
+    if FLAGS.encode:
+        if FLAGS.resume or FLAGS.train:
+            model_file = FLAGS.premaml
+            if model_file:
+                resume_itr = 0
+                print("Loading model weights from " + model_file)
+                variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
+                # remove the untrained parameters 
+                variables_to_restore = [v for v in variables if v.name.split('/')[0] =='model']
+                # load part parameters of the model
+                restorer = tf.train.Saver(variables_to_restore)#, scope='model')
+                restorer.restore(sess, model_file)
 
-    ##test_model = MAML(dim_input, dim_output, test_num_updates=1)
-    model.construct_model(input_tensors=None, prefix='metaval_',scope='model_')#, scope='model_%d'%i)
-    test(model, saver, sess, tr, testEncode_result["tasks"], test_num_updates=20)
+
+        trainEncode_result =trainEncode(pre_model, saver, sess, resume_itr)
+        with open(FLAGS.logdir +'/trainEncode_result.pkl', 'wb') as f:
+            pickle.dump(trainEncode_result, f)
+        encodes = trainEncode_result["encodes"]
+        testEncode_result = testEncode(pre_model, saver, sess,  encodes, test_num_updates=20)
+        with open(FLAGS.logdir +'/testEncode_result.pkl', 'wb') as f:
+            pickle.dump(testEncode_result, f)
+        
+    else:
+        tr=[]
+        with open(FLAGS.logdir +'/trainEncode_result.pkl', 'rb') as f:
+            trainEncode_result = pickle.load(f)
+        with open(FLAGS.logdir +'/testEncode_result.pkl', 'rb') as f:
+            testEncode_result = pickle.load(f)
+
+        for i in range(len(testEncode_result["tasks"])):
+            tf.global_variables_initializer().run()
+            t=train(model, saver, sess, trainEncode_result["tasks"], testEncode_result["w"][i], resume_itr)
+            tr.append(t)
+
+        ##test_model = MAML(dim_input, dim_output, test_num_updates=1)
+        model.construct_model(input_tensors=None, prefix='metaval_',scope='model_')#, scope='model_%d'%i)
+        tf.global_variables_initializer().run()
+        test(model, saver, sess, tr, testEncode_result["tasks"], test_num_updates=20)
 
 if __name__ == "__main__":
     main()
