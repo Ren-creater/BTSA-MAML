@@ -291,22 +291,33 @@ def test(model_dict, pre_model, saver, sess, test_num_updates=None):
         else:
             continue
 
+        dist=dists[0]
         model = model_dict[model_idx2train]
-        for key in model.weights.keys(): 
+        
+
+        """for key in model.weights.keys(): 
             model.weights[key]=0
             sum=0     
             for i in range(FLAGS.num_groups):
-                sum+=1/dists[i]
+                sum+=1/dist[i]
             for i in range(FLAGS.num_groups):
                 ##if weighted average of model parameters                
-                model.weights[key]+=model_dict[i].weights[key]*(1/dists[i])/sum
-                ##if weighted gradient
-                ##fast_weights[key] - self.update_lr[key]*gradients[key]*(1/dists[i])
-                ##model.fast_weights[key]+=model_dict[i].fast_weights[key]*(1/dists[i])
-                ##
-                ##fast_weights = dict(zip(fast_weights.keys(), [fast_weights[key] - self.update_lr[key]*gradients[key] for key in fast_weights.keys()]))
-
+                model.weights[key]+=model_dict[i].weights[key]*(1/dist[i])/sum"""
         
+        
+        sum_inv_dist = 0
+        for i in range(FLAGS.num_groups):
+            sum_inv_dist += 1/dist[i]
+        # Inside the test function
+        for key in model.weights.keys():
+            weight_updates = []
+            sum_inv_dist = 0
+  
+            for i in range(FLAGS.num_groups):
+                weight_updates.append(model_dict[i].weights[key]*(1/dist[i])/sum_inv_dist)
+            tf.assign(model.weights[key],tf.math.add_n(weight_updates))
+        
+
         # _preacc, _postacc = [],[]
         inputa = np.vstack([inp[0] for inp in Task_Buffer[model_idx2train]])
         labela = np.vstack([inp[1] for inp in Task_Buffer[model_idx2train]])
